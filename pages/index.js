@@ -1,3 +1,4 @@
+import { useMetaMaskAccount } from "../components/meta-mask-account-provider"
 import { useState, useEffect } from "react"
 import PrimaryButton from "../components/primary-button"
 import Keyboard from "../components/keyboard"
@@ -6,58 +7,28 @@ import { UserCircleIcon } from "@heroicons/react/solid"
 import TipButton from "../components/tip-button"
 import abi from "../utils/Keyboards.json"
 import { ethers } from "ethers"
+import getKeyboardsContract from "../utils/getKeyboardsContract"
+import { toast } from "react-hot-toast"
 
 export default function Home() {
-  const [ethereum, setEthereum] = useState(undefined)
-  const [connectedAccount, setConnectedAccount] = useState(undefined)
+  const { ethereum, connectedAccount, connectAccount } = useMetaMaskAccount();
+
   const [keyboards, setKeyboards] = useState([])
   const [newKeyboard, setNewKeyboard] = useState("")
   const [keyboardsLoading, setKeyboardsLoading] = useState(false)
 
-  const contractAddress = '0xeac89CE8B437c0188fCb766BAE1e4713B9e6b706'
+  const keyboardsContract = getKeyboardsContract(ethereum);
+
+  const contractAddress = '0x676835d2535a40815A003ca24f2C43184B4Ed8BF'
   const contractABI = abi.abi
 
-  const handleAccounts = (accounts) => {
-    if (accounts.length > 0) {
-      const account = accounts[0]
-      console.log("We have an authorized account: ", account)
-      setConnectedAccount(account)
-    } else {
-      console.log("No authorized accounts yet")
-    }
-  }
-
-  const submitCreate = async (e) => {
-    e.preventDefault();
-
-    if (!ethereum) {
-      console.error('Ethereum object is required to create a keyboard');
-      return;
-    }
-
-    const provider = new ethers.providers.Web3Provider(ethereum);
-    const signer = provider.getSigner();
-    const keyboardsContract = new ethers.Contract(contractAddress, contractABI, signer);
-
-    const createTxn = await keyboardsContract.create(newKeyboard);
-    console.log('Create transaction started...', createTxn.hash);
-
-    await createTxn.wait();
-    console.log('Created keyboard!', createTxn.hash);
-
-    await getKeyboards();
-  }
-
   const getKeyboards = async () => {
-    if (ethereum && connectedAccount) {
+    if (keyboardsContract && connectedAccount) {
       setKeyboardsLoading(true)
       try {
-        const provider = new ethers.providers.Web3Provider(ethereum);
-        const signer = provider.getSigner();
-        const keyboardsContract = new ethers.Contract(contractAddress, contractABI, signer)
-  
-        const keyboards = await keyboardsContract.getKeyboards()
+        const keyboards = await keyboardsContract.getKeyboards();
         console.log('Retrieved keyboards...', keyboards)
+  
         setKeyboards(keyboards)
       } finally {
         setKeyboardsLoading(false)
@@ -65,30 +36,26 @@ export default function Home() {
     }
   }
 
-  useEffect(() => getKeyboards(), [connectedAccount])
+  useEffect(() => getKeyboards(), [!!keyboardsContract, connectedAccount])
 
-  const getConnectedAccount = async () => {
-    if (window.ethereum) {
-      setEthereum(window.ethereum)
-    }
+  const addContractEventHandlers = () => {
+    if (keyboardsContract && connectedAccount) {
+      keyboardsContract.on('KeyboardCreated', async (keyboard) => {
+        if (connectedAccount && !addressesEqual(keyboard.owner, connectedAccount)) {
+          toast('Somebody created a new keyboard!', { id: JSON.stringify(keyboard) })
+        }
+        await getKeyboards();
+      })
 
-    if (ethereum) {
-      const accounts = await ethereum.request({ method: 'eth_accounts' })
-      handleAccounts(accounts)
+      keyboardsContract.on('TipSent', (recipient, amount) => {
+        if (addressesEqual(recipient, connectedAccount)) {
+          toast(`You received a tip of ${ethers.utils.formatEther(amount)} eth!`, { id: recipient + amount })
+        }
+      })
     }
   }
-  
-  useEffect(() => getConnectedAccount(), [])
 
-  const connectAccount = async () => {
-    if (!ethereum) {
-      alert('MetaMask is required to connect an account')
-      return
-    }
-    
-    const accounts = await ethereum.request({ method: 'eth_requestAccounts' })
-    handleAccounts(accounts)
-  }
+  useEffect(addContractEventHandlers, [!!keyboardsContract, connectedAccount]);
 
   if (!ethereum) {
     return <p>Please install MetaMask to connect this site</p>
@@ -112,7 +79,7 @@ export default function Home() {
                 <span className="absolute top-1 right-6">
                   {addressesEqual(owner, connectedAccount) ?
                     <UserCircleIcon className="h-5 w-5 text-indigo-100" /> :
-                    <TipButton ethereum={ethereum} index={i} />
+                    <TipButton keyboardsContract={keyboardsContract} index={i} />
                   }
                 </span>
               </div>
